@@ -1,0 +1,233 @@
+"""عبوري داونلودر — Social media & YouTube downloader backend.
+
+FastAPI + yt-dlp. Endpoints:
+  GET  /                      -> frontend
+  GET  /api/search?q=...      -> search YouTube, return candidates
+  GET  /api/info?url=...      -> title/thumbnail/duration for a pasted link
+  GET  /api/formats?url=...   -> available format presets for a URL
+  POST /api/download          -> {url, preset} -> downloads & streams the file
+"""
+import asyncio
+import os
+import re
+import shutil
+import tempfile
+from pathlib import Path
+
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
+import yt_dlp
+
+# ---------------------------------------------------------------- presets
+# preset id -> (label, yt-dlp format selector, needs_merge, postprocessors)
+PRESETS = {
+    "video_best": (
+        "🎬 فيديو — أعلى جودة (MP4)",
+        "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/b",
+        True,
+        [{"key": "FFmpegVideoConvertor", "preferedformat": "mp4"}],
+    ),
+    "video_1080": (
+        "🎬 فيديو — 1080p (MP4)",
+        "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080][ext=mp4]/b[height<=1080]",
+        True,
+        [{"key": "FFmpegVideoConvertor", "preferedformat": "mp4"}],
+    ),
+    "video_720": (
+        "🎬 فيديو — 720p (MP4)",
+        "bv*[height<=720][ext=mp4]+ba[ext=m4a]/b[height<=720][ext=mp4]/b[height<=720]",
+        True,
+        [{"key": "FFmpegVideoConvertor", "preferedformat": "mp4"}],
+    ),
+    "video_480": (
+        "🎬 فيديو — 480p (MP4)",
+        "bv*[height<=480][ext=mp4]+ba[ext=m4a]/b[height<=480][ext=mp4]/b[height<=480]",
+        True,
+        [{"key": "FFmpegVideoConvertor", "preferedformat": "mp4"}],
+    ),
+    "audio_mp3": (
+        "🎵 صوت — MP3",
+        "bestaudio/best",
+        False,
+        [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "192"}],
+    ),
+    "audio_m4a": (
+        "🎵 صوت — M4A (أصلي بدون تحويل)",
+        "bestaudio[ext=m4a]/bestaudio/best",
+        False,
+        [],
+    ),
+}
+
+app = FastAPI(title="عبوري داونلودر")
+
+BASE_YDL = {
+    "quiet": True,
+    "no_warnings": True,
+    "noplaylist": True,
+    "socket_timeout": 30,
+    # تحمّل خنق يوتيوب المؤقت للـ IP
+    "retries": 10,
+    "fragment_retries": 10,
+    "retry_sleep": {"http": "exp=1:10", "fragment": "exp=1:10"},
+    "geo_bypass": True,
+    # يلتف حول فحص "Sign in to confirm you're not a bot" من يوتيوب
+    "extractor_args": {"youtube": {"player_client": ["android", "ios"]}},
+}
+
+# دعم ملف كوكيز اختياري (عبر متغير البيئة COOKIES_FILE) —
+# لو يوتيوب طلب تسجيل دخول، صدّر كوكيز المتصفح ومرّر مسار الملف هنا.
+_COOKIES = os.environ.get("COOKIES_FILE")
+if _COOKIES and os.path.exists(_COOKIES):
+    BASE_YDL["cookiefile"] = _COOKIES
+
+SAFE_NAME = re.compile(r"[^A-Za-z0-9\u0600-\u06FF _.\-()\[\]]+")
+
+
+def safe_filename(name: str, ext: str, limit: int = 120) -> str:
+    name = SAFE_NAME.sub("", name).strip() or "download"
+    if len(name) > limit:
+        name = name[:limit].rstrip()
+    return f"{name}.{ext}"
+
+
+def _search_sync(query: str, limit: int = 8):
+    opts = {**BASE_YDL, "extract_flat": "in_playlist"}
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        data = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
+    out = []
+    for e in (data.get("entries") or []):
+        if not e or e.get("_type") == "playlist":
+            continue
+        vid = e.get("id") or ""
+        out.append(
+            {
+                "id": vid,
+                "title": e.get("title") or "بدون عنوان",
+                "channel": e.get("channel") or e.get("uploader") or "",
+                "duration": e.get("duration"),
+                "thumbnail": (e.get("thumbnails") or [{}])[-1].get("url") if e.get("thumbnails") else e.get("thumbnail"),
+                "url": e.get("url") or (f"https://www.youtube.com/watch?v={vid}" if vid else ""),
+            }
+        )
+    return out
+
+
+def _info_sync(url: str):
+    opts = {**BASE_YDL, "skip_download": True}
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+    if info is None:
+        raise ValueError("تعذر قراءة الرابط")
+    thumb = None
+    if info.get("thumbnails"):
+        thumb = info["thumbnails"][-1].get("url")
+    return {
+        "title": info.get("title") or "بدون عنوان",
+        "channel": info.get("channel") or info.get("uploader") or "",
+        "duration": info.get("duration"),
+        "thumbnail": thumb or info.get("thumbnail"),
+        "webpage_url": info.get("webpage_url") or url,
+    }
+
+
+def _download_sync(url: str, preset_id: str):
+    label, fmt, _merge, postprocessors = PRESETS[preset_id]
+    tmpdir = tempfile.mkdtemp(prefix="aboury_dl_")
+    opts = {
+        **BASE_YDL,
+        "format": fmt,
+        "outtmpl": os.path.join(tmpdir, "%(title).80s.%(ext)s"),
+        "postprocessors": postprocessors,
+        "restrictfilenames": False,
+    }
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+        filename = ydl.prepare_filename(info)
+        # postprocessor may change the extension (e.g. mp3 conversion)
+        if not os.path.exists(filename):
+            base = os.path.splitext(filename)[0]
+            for ext in ("mp3", "m4a", "mp4", "webm", "mkv"):
+                cand = base + "." + ext
+                if os.path.exists(cand):
+                    filename = cand
+                    break
+        if not os.path.exists(filename):
+            # fall back: take the newest file in tmpdir
+            files = sorted(Path(tmpdir).glob("*"), key=os.path.getmtime)
+            files = [f for f in files if f.is_file()]
+            if not files:
+                raise ValueError("فشل التحميل: لم يتم إنشاء ملف")
+            filename = str(files[-1])
+    return tmpdir, filename, info.get("title") or "download"
+
+
+class DownloadRequest(BaseModel):
+    url: str
+    preset: str
+
+
+# ------------------------------------------------------------------ routes
+@app.get("/api/search")
+async def search(q: str = Query(..., min_length=2, max_length=200)):
+    try:
+        results = await asyncio.to_thread(_search_sync, q)
+    except Exception as exc:
+        raise HTTPException(502, f"خطأ في البحث: {exc}")
+    return {"results": results}
+
+
+@app.get("/api/info")
+async def info(url: str = Query(..., min_length=8, max_length=2000)):
+    try:
+        data = await asyncio.to_thread(_info_sync, url)
+    except Exception as exc:
+        raise HTTPException(502, f"تعذر قراءة الرابط: {exc}")
+    return data
+
+
+@app.get("/api/formats")
+async def formats(url: str = Query(..., min_length=8, max_length=2000)):
+    # Validate the URL is readable first, then return the preset list.
+    try:
+        data = await asyncio.to_thread(_info_sync, url)
+    except Exception as exc:
+        raise HTTPException(502, f"تعذر قراءة الرابط: {exc}")
+    return {
+        "info": data,
+        "presets": [{"id": pid, "label": label} for pid, (label, *_rest) in PRESETS.items()],
+    }
+
+
+@app.post("/api/download")
+async def download(req: DownloadRequest):
+    if req.preset not in PRESETS:
+        raise HTTPException(400, "صيغة غير مدعومة")
+    if len(req.url) > 2000:
+        raise HTTPException(400, "الرابط طويل جداً")
+    try:
+        tmpdir, filepath, title = await asyncio.to_thread(_download_sync, req.url, req.preset)
+    except Exception as exc:
+        raise HTTPException(502, f"فشل التحميل: {exc}")
+
+    ext = os.path.splitext(filepath)[1].lstrip(".") or "bin"
+    dl_name = safe_filename(title, ext)
+
+    from starlette.background import BackgroundTask
+
+    response = FileResponse(filepath, filename=dl_name)
+    response.background = BackgroundTask(shutil.rmtree, tmpdir, True)
+    return response
+
+
+@app.get("/api/health")
+async def health():
+    return {"ok": True}
+
+
+static_dir = Path(__file__).parent / "static"
+if static_dir.exists():
+    app.mount("/", StaticFiles(directory=str(static_dir), html=True), name="static")
