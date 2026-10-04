@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>عبوري داونلودر | تحميل من يوتيوب ومنصات التواصل</title>
+<style>
+  :root{
+    --bg:#0f1420; --card:#1a2233; --card2:#222c42; --text:#f1f4fa;
+    --muted:#9aa7c2; --accent:#e63946; --accent2:#ffb703; --ok:#2ec4b6;
+  }
+  *{box-sizing:border-box; font-family:"Segoe UI",Tahoma,Arial,sans-serif;}
+  body{margin:0; background:var(--bg); color:var(--text); min-height:100vh;}
+  header{background:linear-gradient(135deg,#e63946,#7b2ff7); padding:34px 20px; text-align:center;}
+  header h1{margin:0; font-size:30px;}
+  header p{margin:8px 0 0; color:#f8e1e4; font-size:15px;}
+  main{max-width:760px; margin:0 auto; padding:24px 16px 60px;}
+  .card{background:var(--card); border-radius:16px; padding:22px; margin-bottom:18px;
+        box-shadow:0 8px 24px rgba(0,0,0,.35);}
+  .tabs{display:flex; gap:8px; margin-bottom:16px;}
+  .tab{flex:1; padding:12px; border:0; border-radius:10px; cursor:pointer;
+       background:var(--card2); color:var(--muted); font-size:15px; font-weight:bold;}
+  .tab.active{background:var(--accent); color:#fff;}
+  input[type=text]{width:100%; padding:14px; border-radius:10px; border:1px solid #33405c;
+    background:#0d1322; color:var(--text); font-size:16px;}
+  input[type=text]:focus{outline:2px solid var(--accent);}
+  button.big{width:100%; margin-top:12px; padding:14px; border:0; border-radius:10px;
+    background:var(--accent); color:#fff; font-size:17px; font-weight:bold; cursor:pointer;}
+  button.big:disabled{opacity:.5; cursor:wait;}
+  button.ghost{background:transparent; border:1px solid #33405c; color:var(--text);
+    padding:8px 14px; border-radius:8px; cursor:pointer; font-size:14px;}
+  .result{display:flex; gap:12px; background:var(--card2); border-radius:12px;
+          padding:10px; margin-top:10px; align-items:center;}
+  .result img{width:150px; height:84px; object-fit:cover; border-radius:8px; flex-shrink:0;}
+  .result .meta{flex:1; min-width:0;}
+  .result .t{font-weight:bold; font-size:14px; margin-bottom:4px;
+    display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;}
+  .result .c{color:var(--muted); font-size:12px;}
+  .result button{white-space:nowrap;}
+  .preview{display:flex; gap:14px; align-items:center;}
+  .preview img{width:190px; height:107px; object-fit:cover; border-radius:10px;}
+  .preview .t{font-weight:bold; margin-bottom:4px;}
+  .preview .c{color:var(--muted); font-size:13px;}
+  select{width:100%; padding:14px; border-radius:10px; border:1px solid #33405c;
+    background:#0d1322; color:var(--text); font-size:16px; margin-top:14px;}
+  .status{margin-top:12px; font-size:14px; min-height:22px;}
+  .status.err{color:var(--accent2);}
+  .status.ok{color:var(--ok);}
+  .spinner{display:inline-block; width:16px; height:16px; border:2px solid #fff3;
+    border-top-color:#fff; border-radius:50%; animation:sp 0.8s linear infinite;
+    vertical-align:middle; margin-left:6px;}
+  @keyframes sp{to{transform:rotate(360deg);}}
+  .hint{color:var(--muted); font-size:13px; margin-top:10px; line-height:1.8;}
+  .badges{display:flex; flex-wrap:wrap; gap:8px; margin-top:12px;}
+  .badge{background:var(--card2); border:1px solid #33405c; border-radius:20px;
+    padding:4px 12px; font-size:12px; color:var(--muted);}
+  footer{text-align:center; color:var(--muted); font-size:12px; padding:20px;}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>⬇️ عبوري داونلودر</h1>
+  <p>حمّل من يوتيوب، تيك توك، إنستغرام، فيسبوك، تويتر/X ومنصات ثانية — بالصيغة اللي تختارها</p>
+</header>
+
+<main>
+  <!-- البحث / الرابط -->
+  <div class="card">
+    <div class="tabs">
+      <button class="tab active" id="tabSearch" onclick="switchTab('search')">🔎 بحث باسم الأغنية / الفيديو</button>
+      <button class="tab" id="tabLink" onclick="switchTab('link')">🔗 لصق رابط</button>
+    </div>
+
+    <div id="paneSearch">
+      <input type="text" id="q" placeholder="اكتب اسم الأغنية أو الفيديو… مثال: كاظم الساهر عبرت الشط" onkeydown="if(event.key==='Enter')doSearch()">
+      <button class="big" id="btnSearch" onclick="doSearch()">ابحث في يوتيوب</button>
+      <div id="results"></div>
+    </div>
+
+    <div id="paneLink" style="display:none">
+      <input type="text" id="url" placeholder="الصق الرابط هنا… (يوتيوب / تيك توك / إنستغرام / فيسبوك / X)">
+      <button class="big" id="btnLink" onclick="doLink()">جلب معلومات الرابط</button>
+      <div class="hint">يدعم روابط يوتيوب، تيك توك، إنستغرام، فيسبوك، تويتر/X، وغيرها من المنصات المدعومة.</div>
+    </div>
+  </div>
+
+  <!-- اختيار الصيغة والتحميل -->
+  <div class="card" id="dlCard" style="display:none">
+    <div class="preview">
+      <img id="pvThumb" src="" alt="">
+      <div>
+        <div class="t" id="pvTitle"></div>
+        <div class="c" id="pvChannel"></div>
+      </div>
+    </div>
+    <select id="preset"></select>
+    <button class="big" id="btnDl" onclick="doDownload()">⬇️ تحميل الآن</button>
+    <div class="status" id="status"></div>
+  </div>
+
+  <div class="card">
+    <b>المنصات المدعومة</b>
+    <div class="badges">
+      <span class="badge">YouTube</span><span class="badge">TikTok</span>
+      <span class="badge">Instagram</span><span class="badge">Facebook</span>
+      <span class="badge">X / Twitter</span><span class="badge">+ أكثر من 1000 موقع</span>
+    </div>
+  </div>
+</main>
+
+<footer>صُنع بواسطة عبوري 🤖 — للاستخدام الشخصي، احترم حقوق النشر</footer>
+
+<script>
+let currentUrl = "";
+
+function switchTab(which){
+  document.getElementById('tabSearch').classList.toggle('active', which==='search');
+  document.getElementById('tabLink').classList.toggle('active', which==='link');
+  document.getElementById('paneSearch').style.display = which==='search' ? 'block':'none';
+  document.getElementById('paneLink').style.display = which==='link' ? 'block':'none';
+}
+
+function fmtDur(s){
+  if(s==null) return "";
+  const m = Math.floor(s/60), sec = s%60;
+  return m + ":" + String(sec).padStart(2,"0");
+}
+
+function setStatus(msg, cls){
+  const el = document.getElementById('status');
+  el.className = "status " + (cls||"");
+  el.innerHTML = msg;
+}
+
+function loading(btn, on){
+  btn.disabled = on;
+  if(on) btn.innerHTML = '<span class="spinner"></span> جاري العمل…';
+}
+
+async function doSearch(){
+  const q = document.getElementById('q').value.trim();
+  if(q.length < 2){ alert("اكتب كلمة للبحث أولاً"); return; }
+  const btn = document.getElementById('btnSearch'), old = btn.innerHTML;
+  loading(btn, true);
+  document.getElementById('results').innerHTML = "";
+  try{
+    const r = await fetch("/api/search?q=" + encodeURIComponent(q));
+    const d = await r.json();
+    if(!r.ok) throw new Error(d.detail || "خطأ");
+    const box = document.getElementById('results');
+    if(!d.results.length){ box.innerHTML = '<div class="hint">ما لكيت نتائج، جرّب كلمات ثانية.</div>'; }
+    d.results.forEach(it=>{
+      const div = document.createElement('div');
+      div.className = 'result';
+      div.innerHTML =
+        (it.thumbnail ? `<img src="${it.thumbnail}" loading="lazy">` : "") +
+        `<div class="meta"><div class="t">${esc(it.title)}</div>` +
+        `<div class="c">${esc(it.channel||"")} ${it.duration? "• "+fmtDur(it.duration):""}</div></div>`;
+      const b = document.createElement('button');
+      b.className = 'ghost'; b.textContent = '⬇ اختار';
+      b.onclick = ()=> pickUrl(it.url);
+      div.appendChild(b);
+      box.appendChild(div);
+    });
+  }catch(e){ alert("فشل البحث: " + e.message); }
+  finally{ btn.disabled=false; btn.innerHTML=old; }
+}
+
+async function doLink(){
+  const url = document.getElementById('url').value.trim();
+  if(url.length < 8){ alert("الصق رابطاً صحيحاً أولاً"); return; }
+  pickUrl(url);
+}
+
+async function pickUrl(url){
+  currentUrl = url;
+  const btn = document.getElementById('btnLink'), old = btn.innerHTML;
+  loading(btn, true);
+  setStatus("");
+  try{
+    const r = await fetch("/api/formats?url=" + encodeURIComponent(url));
+    const d = await r.json();
+    if(!r.ok) throw new Error(d.detail || "تعذر قراءة الرابط");
+    document.getElementById('pvThumb').src = d.info.thumbnail || "";
+    document.getElementById('pvTitle').textContent = d.info.title;
+    document.getElementById('pvChannel').textContent =
+      [d.info.channel, d.info.duration!=null?fmtDur(d.info.duration):""].filter(Boolean).join(" • ");
+    const sel = document.getElementById('preset');
+    sel.innerHTML = "";
+    d.presets.forEach(p=>{
+      const o = document.createElement('option');
+      o.value = p.id; o.textContent = p.label;
+      sel.appendChild(o);
+    });
+    document.getElementById('dlCard').style.display = 'block';
+    document.getElementById('dlCard').scrollIntoView({behavior:'smooth', block:'center'});
+    setStatus("جاهز — اختار الصيغة واضغط تحميل.", "ok");
+  }catch(e){ setStatus("⚠ " + e.message, "err"); }
+  finally{ btn.disabled=false; btn.innerHTML=old; }
+}
+
+async function doDownload(){
+  const preset = document.getElementById('preset').value;
+  const btn = document.getElementById('btnDl'), old = btn.innerHTML;
+  loading(btn, true);
+  setStatus("⏳ جاري التحميل والتجهيز… قد ياخذ شوية وقت حسب حجم الملف.");
+  try{
+    const r = await fetch("/api/download", {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({url: currentUrl, preset})
+    });
+    if(!r.ok){
+      const d = await r.json().catch(()=>({}));
+      throw new Error(d.detail || "فشل التحميل");
+    }
+    const blob = await r.blob();
+    let name = "download";
+    const cd = r.headers.get("content-disposition");
+    if(cd){
+      const m = cd.match(/filename\*=UTF-8''([^;]+)|filename="([^"]+)"/);
+      if(m) name = decodeURIComponent(m[1]||m[2]);
+    }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setStatus("✅ تم التحميل بنجاح!", "ok");
+  }catch(e){ setStatus("⚠ " + e.message, "err"); }
+  finally{ btn.disabled=false; btn.innerHTML=old; }
+}
+
+function esc(s){ return String(s||"").replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+</script>
+</body>
+</html>
