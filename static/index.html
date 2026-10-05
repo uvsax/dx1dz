@@ -109,7 +109,7 @@
   </div>
 </main>
 
-<footer>صُنع بواسطة عمك حسن ، نزل وادعيلي .. </footer>
+<footer>صُنع بواسطة عبوري 🤖 — للاستخدام الشخصي، احترم حقوق النشر</footer>
 
 <script>
 let currentUrl = "";
@@ -159,7 +159,7 @@ async function doSearch(){
         `<div class="c">${esc(it.channel||"")} ${it.duration? "• "+fmtDur(it.duration):""}</div></div>`;
       const b = document.createElement('button');
       b.className = 'ghost'; b.textContent = '⬇ اختار';
-      b.onclick = ()=> pickUrl(it.url);
+      b.onclick = ()=> pickUrl(it.url, b);
       div.appendChild(b);
       box.appendChild(div);
     });
@@ -173,11 +173,14 @@ async function doLink(){
   pickUrl(url);
 }
 
-async function pickUrl(url){
+async function pickUrl(url, btn){
   currentUrl = url;
-  const btn = document.getElementById('btnLink'), old = btn.innerHTML;
-  loading(btn, true);
-  setStatus("");
+  const card = document.getElementById('dlCard');
+  card.style.display = 'block';
+  setStatus("⏳ جاري جلب معلومات الفيديو…");
+  const b = btn || document.getElementById('btnLink');
+  const old = b.innerHTML;
+  loading(b, true);
   try{
     const r = await fetch("/api/formats?url=" + encodeURIComponent(url));
     const d = await r.json();
@@ -197,7 +200,7 @@ async function pickUrl(url){
     document.getElementById('dlCard').scrollIntoView({behavior:'smooth', block:'center'});
     setStatus("جاهز — اختار الصيغة واضغط تحميل.", "ok");
   }catch(e){ setStatus("⚠ " + e.message, "err"); }
-  finally{ btn.disabled=false; btn.innerHTML=old; }
+  finally{ b.disabled=false; b.innerHTML=old; }
 }
 
 async function doDownload(){
