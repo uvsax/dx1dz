@@ -86,6 +86,15 @@ def _find_cookies():
     for cand in [env, "/etc/secrets/cookies.txt",
                  str(Path(__file__).parent / "cookies.txt")]:
         if cand and os.path.exists(cand):
+            # ملفات Render السرية للقراءة فقط، وyt-dlp يحاول الكتابة عليها —
+            # ننسخها لمجلد مؤقت قابل للكتابة أولاً.
+            if cand.startswith("/etc/secrets/"):
+                dest = os.path.join(tempfile.gettempdir(), "cookies.txt")
+                try:
+                    shutil.copyfile(cand, dest)
+                    return dest
+                except Exception:
+                    continue
             return cand
     return None
 
