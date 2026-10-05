@@ -23,43 +23,54 @@ import yt_dlp
 
 # ---------------------------------------------------------------- presets
 # preset id -> (label, yt-dlp format selector, needs_merge, postprocessors)
+# نستخدم محددات متساهلة + تحويل ffmpeg مضمّن، مع بدائل تلقائية عند الفشل.
 PRESETS = {
     "video_best": (
         "🎬 فيديو — أعلى جودة (MP4)",
-        "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/b",
+        "bv*+ba/b",
         True,
         [{"key": "FFmpegVideoConvertor", "preferedformat": "mp4"}],
     ),
     "video_1080": (
         "🎬 فيديو — 1080p (MP4)",
-        "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080][ext=mp4]/b[height<=1080]",
+        "bv*[height<=1080]+ba/b[height<=1080]",
         True,
         [{"key": "FFmpegVideoConvertor", "preferedformat": "mp4"}],
     ),
     "video_720": (
         "🎬 فيديو — 720p (MP4)",
-        "bv*[height<=720][ext=mp4]+ba[ext=m4a]/b[height<=720][ext=mp4]/b[height<=720]",
+        "bv*[height<=720]+ba/b[height<=720]",
         True,
         [{"key": "FFmpegVideoConvertor", "preferedformat": "mp4"}],
     ),
     "video_480": (
         "🎬 فيديو — 480p (MP4)",
-        "bv*[height<=480][ext=mp4]+ba[ext=m4a]/b[height<=480][ext=mp4]/b[height<=480]",
+        "bv*[height<=480]+ba/b[height<=480]",
         True,
         [{"key": "FFmpegVideoConvertor", "preferedformat": "mp4"}],
     ),
     "audio_mp3": (
         "🎵 صوت — MP3",
-        "bestaudio/best",
+        "ba/b",
         False,
         [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "192"}],
     ),
     "audio_m4a": (
         "🎵 صوت — M4A (أصلي بدون تحويل)",
-        "bestaudio[ext=m4a]/bestaudio/best",
+        "ba[ext=m4a]/ba/b",
         False,
         [],
     ),
+}
+
+# بدائل تلقائية إذا رفض يوتيوب المحدد الأساسي
+FORMAT_FALLBACKS = {
+    "video_best": ["b[ext=mp4]/b", "b"],
+    "video_1080": ["b[height<=1080][ext=mp4]/b[height<=1080]", "b[height<=1080]", "b"],
+    "video_720": ["b[height<=720][ext=mp4]/b[height<=720]", "b[height<=720]", "b"],
+    "video_480": ["b[height<=480][ext=mp4]/b[height<=480]", "b[height<=480]", "b"],
+    "audio_mp3": ["ba[ext=m4a]/ba", "b"],
+    "audio_m4a": ["ba", "b"],
 }
 
 app = FastAPI(title="عبوري داونلودر")
@@ -102,6 +113,23 @@ def _find_cookies():
 _COOKIES = _find_cookies()
 if _COOKIES:
     BASE_YDL["cookiefile"] = _COOKIES
+
+
+# ffmpeg مضمّن عبر imageio-ffmpeg (ضروري للدمج والتحويل على Render)
+def _find_ffmpeg():
+    try:
+        import imageio_ffmpeg
+        exe = imageio_ffmpeg.get_ffmpeg_exe()
+        if exe and os.path.exists(exe):
+            return exe
+    except Exception:
+        pass
+    return shutil.which("ffmpeg")
+
+
+_FFMPEG = _find_ffmpeg()
+if _FFMPEG:
+    BASE_YDL["ffmpeg_location"] = _FFMPEG
 
 
 def _friendly_error(exc: Exception) -> str:
@@ -166,33 +194,54 @@ def _info_sync(url: str):
 
 def _download_sync(url: str, preset_id: str):
     label, fmt, _merge, postprocessors = PRESETS[preset_id]
+    if not _FFMPEG and postprocessors:
+        # بدون ffmpeg لا دمج ولا تحويل — نحمّل أفضل ملف جاهز مباشرة
+        postprocessors = []
+    selectors = [fmt] + FORMAT_FALLBACKS.get(preset_id, ["b"])
+    last_exc = None
+    for sel in selectors:
+        try:
+            return _try_download(url, sel, postprocessors)
+        except Exception as exc:
+            if "format" in str(exc).lower() and "not available" in str(exc).lower():
+                last_exc = exc
+                continue
+            raise
+    raise last_exc if last_exc else ValueError("فشل التحميل")
+
+
+def _try_download(url: str, fmt: str, postprocessors):
     tmpdir = tempfile.mkdtemp(prefix="aboury_dl_")
-    opts = {
-        **BASE_YDL,
-        "format": fmt,
-        "outtmpl": os.path.join(tmpdir, "%(title).80s.%(ext)s"),
-        "postprocessors": postprocessors,
-        "restrictfilenames": False,
-    }
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        filename = ydl.prepare_filename(info)
-        # postprocessor may change the extension (e.g. mp3 conversion)
-        if not os.path.exists(filename):
-            base = os.path.splitext(filename)[0]
-            for ext in ("mp3", "m4a", "mp4", "webm", "mkv"):
-                cand = base + "." + ext
-                if os.path.exists(cand):
-                    filename = cand
-                    break
-        if not os.path.exists(filename):
-            # fall back: take the newest file in tmpdir
-            files = sorted(Path(tmpdir).glob("*"), key=os.path.getmtime)
-            files = [f for f in files if f.is_file()]
-            if not files:
-                raise ValueError("فشل التحميل: لم يتم إنشاء ملف")
-            filename = str(files[-1])
-    return tmpdir, filename, info.get("title") or "download"
+    try:
+        opts = {
+            **BASE_YDL,
+            "format": fmt,
+            "outtmpl": os.path.join(tmpdir, "%(title).80s.%(ext)s"),
+            "postprocessors": postprocessors,
+            "restrictfilenames": False,
+        }
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            filename = ydl.prepare_filename(info)
+            # postprocessor may change the extension (e.g. mp3 conversion)
+            if not os.path.exists(filename):
+                base = os.path.splitext(filename)[0]
+                for ext in ("mp3", "m4a", "mp4", "webm", "mkv"):
+                    cand = base + "." + ext
+                    if os.path.exists(cand):
+                        filename = cand
+                        break
+            if not os.path.exists(filename):
+                # fall back: take the newest file in tmpdir
+                files = sorted(Path(tmpdir).glob("*"), key=os.path.getmtime)
+                files = [f for f in files if f.is_file()]
+                if not files:
+                    raise ValueError("فشل التحميل: لم يتم إنشاء ملف")
+                filename = str(files[-1])
+        return tmpdir, filename, info.get("title") or "download"
+    except Exception:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        raise
 
 
 class DownloadRequest(BaseModel):
