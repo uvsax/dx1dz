@@ -78,11 +78,32 @@ BASE_YDL = {
     "extractor_args": {"youtube": {"player_client": ["android", "ios"]}},
 }
 
-# دعم ملف كوكيز اختياري (عبر متغير البيئة COOKIES_FILE) —
-# لو يوتيوب طلب تسجيل دخول، صدّر كوكيز المتصفح ومرّر مسار الملف هنا.
-_COOKIES = os.environ.get("COOKIES_FILE")
-if _COOKIES and os.path.exists(_COOKIES):
+# دعم ملف كوكيز (يفك حظر "Sign in to confirm you're not a bot" من يوتيوب) —
+# يُقرأ من متغير البيئة COOKIES_FILE، أو تلقائياً من /etc/secrets/cookies.txt
+# (ملف سري بـ Render) أو ./cookies.txt بجانب التطبيق.
+def _find_cookies():
+    env = os.environ.get("COOKIES_FILE", "").strip()
+    for cand in [env, "/etc/secrets/cookies.txt",
+                 str(Path(__file__).parent / "cookies.txt")]:
+        if cand and os.path.exists(cand):
+            return cand
+    return None
+
+
+_COOKIES = _find_cookies()
+if _COOKIES:
     BASE_YDL["cookiefile"] = _COOKIES
+
+
+def _friendly_error(exc: Exception) -> str:
+    msg = str(exc)
+    if "Sign in to confirm" in msg or "not a bot" in msg:
+        return ("يوتيوب حظر السيرفر مؤقتاً (فحص بوت). الحل: أضف ملف كوكيز "
+                "بـ Render (Secret Files ← cookies.txt) ثم أعد النشر.")
+    # نظّف بادئة ERROR: [youtube] المزعجة
+    msg = re.sub(r"^ERROR:\s*", "", msg)
+    msg = re.sub(r"\[youtube\]\s*\S*:\s*", "", msg)
+    return msg.strip() or "تعذر قراءة الرابط"
 
 SAFE_NAME = re.compile(r"[^A-Za-z0-9\u0600-\u06FF _.\-()\[\]]+")
 
@@ -185,7 +206,7 @@ async def info(url: str = Query(..., min_length=8, max_length=2000)):
     try:
         data = await asyncio.to_thread(_info_sync, url)
     except Exception as exc:
-        raise HTTPException(502, f"تعذر قراءة الرابط: {exc}")
+        raise HTTPException(502, _friendly_error(exc))
     return data
 
 
@@ -195,7 +216,7 @@ async def formats(url: str = Query(..., min_length=8, max_length=2000)):
     try:
         data = await asyncio.to_thread(_info_sync, url)
     except Exception as exc:
-        raise HTTPException(502, f"تعذر قراءة الرابط: {exc}")
+        raise HTTPException(502, _friendly_error(exc))
     return {
         "info": data,
         "presets": [{"id": pid, "label": label} for pid, (label, *_rest) in PRESETS.items()],
@@ -211,7 +232,7 @@ async def download(req: DownloadRequest):
     try:
         tmpdir, filepath, title = await asyncio.to_thread(_download_sync, req.url, req.preset)
     except Exception as exc:
-        raise HTTPException(502, f"فشل التحميل: {exc}")
+        raise HTTPException(502, f"فشل التحميل: {_friendly_error(exc)}")
 
     ext = os.path.splitext(filepath)[1].lstrip(".") or "bin"
     dl_name = safe_filename(title, ext)
